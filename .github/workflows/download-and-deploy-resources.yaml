@@ -7,6 +7,8 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # 允许 GITHUB_TOKEN 将修复后的文件推送回仓库
 
     steps:
       # 1. 检出代码（内含 pack.toml 等）
@@ -46,3 +48,14 @@ jobs:
         run: |
           curl -fsSL -o packwiz-installer-bootstrap.jar https://github.com/packwiz/packwiz-installer-bootstrap/releases/latest/download/packwiz-installer-bootstrap.jar
           java -jar packwiz-installer-bootstrap.jar -g pack.toml
+
+      # 6. 将下载到的内容上传为工件（artifact），工作流结束后可在 Actions 页面下载
+      - name: Upload downloaded content as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: modrinth-resources
+          path: |
+            mods/
+            resourcepacks/
+            shaderpacks/
+          if-no-files-found: warn
