@@ -1,0 +1,48 @@
+name: Download and Deploy Resources to Private Server
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 检出代码（内含 pack.toml 等）
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. 设置 Java（packwiz-installer 需要 Java）
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'   # 版本根据需要调整，通常 8/17/21 都可以
+
+      # 3. 修复元数据（side 统一为 both）并刷新 packwiz 索引
+      - name: Fix metadata and refresh index
+        run: |
+          chmod +x packwiz
+          bash fix-metadata.sh
+          ./packwiz refresh
+
+      # 4. 将有变更的文件提交并推送回仓库（仅在存在变更时）
+      # 注意：使用 GITHUB_TOKEN 推送不会再次触发本工作流
+      - name: Commit and push changes
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: fix metadata and refresh packwiz index"
+          git push
+
+      # 5. 下载并运行 packwiz-installer
+      - name: Download packwiz-installer and run it
+        run: |
+          curl -fsSL -o packwiz-installer-bootstrap.jar https://github.com/packwiz/packwiz-installer-bootstrap/releases/latest/download/packwiz-installer-bootstrap.jar
+          java -jar packwiz-installer-bootstrap.jar -g pack.toml

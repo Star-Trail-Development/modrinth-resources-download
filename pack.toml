@@ -1,0 +1,13 @@
+name = "modrinth-resources-download"
+author = "Dark2932"
+version = "x"
+pack-format = "packwiz:1.1.0"
+
+[index]
+file = "index.toml"
+hash-format = "sha256"
+hash = "025903c234e5a4b40981144c7adbbd0f5eb1995e3f7c3aecb40d6cf4f6764abe"
+
+[versions]
+minecraft = "1.21.1"
+neoforge = "21.1.248"
