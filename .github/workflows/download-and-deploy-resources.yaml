@@ -1,12 +1,18 @@
 name: Download and Deploy Resources to Private Server
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
+
+concurrency:
+  group: deploy-modrinth-resources
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write   # 允许 GITHUB_TOKEN 将修复后的文件推送回仓库
 
@@ -46,16 +52,72 @@ jobs:
       # 5. 下载并运行 packwiz-installer
       - name: Download packwiz-installer and run it
         run: |
-          curl -fsSL -o packwiz-installer-bootstrap.jar https://github.com/packwiz/packwiz-installer-bootstrap/releases/latest/download/packwiz-installer-bootstrap.jar
+          curl --fail --show-error --silent --location \
+            --retry 3 --retry-delay 2 --retry-connrefused \
+            --output packwiz-installer-bootstrap.jar \
+            https://github.com/packwiz/packwiz-installer-bootstrap/releases/latest/download/packwiz-installer-bootstrap.jar
           java -jar packwiz-installer-bootstrap.jar -g pack.toml
 
-      # 6. 将下载到的内容上传为工件（artifact），工作流结束后可在 Actions 页面下载
-      - name: Upload downloaded content as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: modrinth-resources
-          path: |
-            mods/
-            resourcepacks/
-            shaderpacks/
-          if-no-files-found: warn
+      # 6. 将 Packwiz 下载的资源逐个上传到 FileHub，保留原有目录结构
+      - name: Upload downloaded resources to FileHub
+        env:
+          FILEHUB_URL: ${{ secrets.FILEHUB_URL }}
+          FILEHUB_TOKEN: ${{ secrets.FILEHUB_TOKEN }}
+          FILEHUB_REMOTE_ROOT: modrinth-resources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$FILEHUB_URL" || -z "$FILEHUB_TOKEN" ]]; then
+            echo "FILEHUB_URL and FILEHUB_TOKEN must be configured as repository secrets" >&2
+            exit 1
+          fi
+
+          if [[ "$FILEHUB_URL" != https://* ]]; then
+            echo "FILEHUB_URL must use HTTPS" >&2
+            exit 1
+          fi
+
+          filehub_url="${FILEHUB_URL%/}"
+          resource_dirs=()
+          for dir in mods resourcepacks shaderpacks; do
+            [[ -d "$dir" ]] && resource_dirs+=("$dir")
+          done
+
+          if (( ${#resource_dirs[@]} == 0 )); then
+            echo "No resource directories were found" >&2
+            exit 1
+          fi
+
+          mapfile -d '' resource_files < <(
+            find "${resource_dirs[@]}" -type f ! -name '*.pw.toml' -print0 | sort -z
+          )
+
+          if (( ${#resource_files[@]} == 0 )); then
+            echo "Packwiz did not download any resource files" >&2
+            exit 1
+          fi
+
+          for local_file in "${resource_files[@]}"; do
+            remote_path="${FILEHUB_REMOTE_ROOT}/${local_file}"
+            encoded_path="$(python3 -c 'import sys, urllib.parse; print("/".join(urllib.parse.quote(part, safe="") for part in sys.argv[1].split("/")))' "$remote_path")"
+            local_sha256="$(sha256sum "$local_file" | cut -d ' ' -f 1)"
+
+            echo "Uploading $local_file -> $remote_path"
+            response="$(curl --fail-with-body --show-error --silent \
+              --proto '=https' --tlsv1.2 \
+              --retry 3 --retry-delay 2 --retry-connrefused \
+              --request PUT \
+              --header "Authorization: Bearer ${FILEHUB_TOKEN}" \
+              --header 'Content-Type: application/octet-stream' \
+              --data-binary "@${local_file}" \
+              "${filehub_url}/api/files/${encoded_path}")"
+
+            remote_sha256="$(jq -er '.sha256' <<<"$response")"
+            if [[ "$remote_sha256" != "$local_sha256" ]]; then
+              echo "SHA256 mismatch after uploading $local_file" >&2
+              exit 1
+            fi
+          done
+
+          echo "Uploaded and verified ${#resource_files[@]} resource file(s)"
