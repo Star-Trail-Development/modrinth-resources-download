@@ -98,10 +98,12 @@ jobs:
             exit 1
           fi
 
+          current_resource_paths=()
           for local_file in "${resource_files[@]}"; do
             remote_path="${FILEHUB_REMOTE_ROOT}/${local_file}"
             encoded_path="$(python3 -c 'import sys, urllib.parse; print("/".join(urllib.parse.quote(part, safe="") for part in sys.argv[1].split("/")))' "$remote_path")"
             local_sha256="$(sha256sum "$local_file" | cut -d ' ' -f 1)"
+            current_resource_paths+=("$remote_path")
 
             echo "Uploading $local_file -> $remote_path"
             response="$(curl --fail-with-body --show-error --silent \
@@ -121,3 +123,82 @@ jobs:
           done
 
           echo "Uploaded and verified ${#resource_files[@]} resource file(s)"
+
+          # 上传全部成功后，将三个远端资源目录同步为当前清单，清理旧版本文件。
+          if (( ${#current_resource_paths[@]} == 0 )); then
+            echo "No local resource files were found; refusing to clean remote directories" >&2
+            exit 1
+          fi
+
+          index_json="$(curl --fail-with-body --show-error --silent \
+            --retry 3 --retry-delay 2 --retry-connrefused \
+            "${filehub_url}/index.json")"
+
+          if ! jq -e '
+            ((.files | type) == "array")
+            and all(.files[]; (.path | type) == "string")
+          ' >/dev/null <<<"$index_json"; then
+            echo "FileHub returned an invalid file index" >&2
+            exit 1
+          fi
+
+          managed_prefixes=(
+            "${FILEHUB_REMOTE_ROOT}/mods/"
+            "${FILEHUB_REMOTE_ROOT}/resourcepacks/"
+            "${FILEHUB_REMOTE_ROOT}/shaderpacks/"
+          )
+          mapfile -t remote_resource_paths < <(
+            jq -r \
+              --arg mods_prefix "${managed_prefixes[0]}" \
+              --arg resourcepacks_prefix "${managed_prefixes[1]}" \
+              --arg shaderpacks_prefix "${managed_prefixes[2]}" '
+              .files[]
+              | select(
+                  (.path | startswith($mods_prefix))
+                  or (.path | startswith($resourcepacks_prefix))
+                  or (.path | startswith($shaderpacks_prefix))
+                )
+              | .path
+            ' <<<"$index_json"
+          )
+
+          deleted_count=0
+          for remote_path in "${remote_resource_paths[@]}"; do
+            keep_file=false
+            for current_path in "${current_resource_paths[@]}"; do
+              if [[ "$remote_path" == "$current_path" ]]; then
+                keep_file=true
+                break
+              fi
+            done
+
+            if [[ "$keep_file" == true ]]; then
+              continue
+            fi
+
+            managed_path=false
+            for managed_prefix in "${managed_prefixes[@]}"; do
+              if [[ "$remote_path" == "$managed_prefix"* ]]; then
+                managed_path=true
+                break
+              fi
+            done
+            if [[ "$managed_path" != true ]]; then
+              echo "Refusing to delete path outside managed resource directories: $remote_path" >&2
+              exit 1
+            fi
+
+            encoded_path="$(python3 -c 'import sys, urllib.parse; print("/".join(urllib.parse.quote(part, safe="") for part in sys.argv[1].split("/")))' "$remote_path")"
+            echo "Deleting obsolete resource file: $remote_path"
+            response="$(curl --fail-with-body --show-error --silent \
+              --proto '=https' --tlsv1.2 \
+              --retry 3 --retry-delay 2 --retry-connrefused \
+              --request DELETE \
+              --header "Authorization: Bearer ${FILEHUB_TOKEN}" \
+              "${filehub_url}/api/files/${encoded_path}")"
+
+            jq -e '.success == true' >/dev/null <<<"$response"
+            ((deleted_count += 1))
+          done
+
+          echo "Deleted $deleted_count obsolete resource file(s)"
