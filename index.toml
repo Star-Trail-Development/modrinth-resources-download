@@ -32,7 +32,7 @@ metafile = true
 
 [[files]]
 file = "mods/kaleidoscopechinesefood.pw.toml"
-hash = "f6592801b060eab418fa6d111357045a076bbfe643767cc53feec79b73d54914"
+hash = "9521423fa4d095b5f5eb9a405d47b22dfd71a87ef56e75cd746f42b1f77c6fd6"
 metafile = true
 
 [[files]]
@@ -57,7 +57,7 @@ metafile = true
 
 [[files]]
 file = "mods/the-ponderer.pw.toml"
-hash = "ae50f3d4e19817d649c0f609dd1a6126c0df9b07ded9d09cba38e8697704895f"
+hash = "d08890a552e0cb2c58df2013210eecebf197f18dc00181adfbd27f78216418ec"
 metafile = true
 
 [[files]]
